@@ -1,0 +1,6 @@
+name: applypilot-job-agent
+entrypoint: agent:run_applypilot
+python_version: "3.11"
+browser: false
+max_concurrency: 2
+run_timeout_minutes: 60
