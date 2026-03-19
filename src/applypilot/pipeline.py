@@ -13,6 +13,7 @@ Usage (via CLI):
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime
@@ -35,7 +36,7 @@ console = Console()
 STAGE_ORDER = ("discover", "enrich", "score", "tailor", "cover", "pdf")
 
 STAGE_META: dict[str, dict] = {
-    "discover": {"desc": "Job discovery (JobSpy + Workday + smart extract)"},
+    "discover": {"desc": "Job discovery (JobSpy + Workday; smart extract optional)"},
     "enrich":   {"desc": "Detail enrichment (full descriptions + apply URLs)"},
     "score":    {"desc": "LLM scoring (fit 1-10)"},
     "tailor":   {"desc": "Resume tailoring (LLM + validation)"},
@@ -60,7 +61,7 @@ _UPSTREAM: dict[str, str | None] = {
 # ---------------------------------------------------------------------------
 
 def _run_discover(workers: int = 1) -> dict:
-    """Stage: Job discovery — JobSpy, Workday, and smart-extract scrapers."""
+    """Stage: Job discovery — JobSpy + Workday by default; smart-extract optional."""
     stats: dict = {"jobspy": None, "workday": None, "smartextract": None}
 
     # JobSpy
@@ -85,16 +86,27 @@ def _run_discover(workers: int = 1) -> dict:
         console.print(f"  [red]Workday error:[/red] {e}")
         stats["workday"] = f"error: {e}"
 
-    # Smart extract
-    console.print("  [cyan]Smart extract (AI-powered scraping)...[/cyan]")
-    try:
-        from applypilot.discovery.smartextract import run_smart_extract
-        run_smart_extract(workers=workers)
-        stats["smartextract"] = "ok"
-    except Exception as e:
-        log.error("Smart extract failed: %s", e)
-        console.print(f"  [red]Smart extract error:[/red] {e}")
-        stats["smartextract"] = f"error: {e}"
+    # Smart extract (disabled by default to avoid extra LLM cost during discovery).
+    enable_smart_extract = (
+        (os.environ.get("APPLYPILOT_ENABLE_SMART_EXTRACT", "0") or "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if enable_smart_extract:
+        console.print("  [cyan]Smart extract (AI-powered scraping)...[/cyan]")
+        try:
+            from applypilot.discovery.smartextract import run_smart_extract
+            run_smart_extract(workers=workers)
+            stats["smartextract"] = "ok"
+        except Exception as e:
+            log.error("Smart extract failed: %s", e)
+            console.print(f"  [red]Smart extract error:[/red] {e}")
+            stats["smartextract"] = f"error: {e}"
+    else:
+        console.print(
+            "  [yellow]Smart extract disabled[/yellow] "
+            "(set APPLYPILOT_ENABLE_SMART_EXTRACT=1 to enable)"
+        )
+        stats["smartextract"] = "skipped"
 
     return stats
 
