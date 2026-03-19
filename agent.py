@@ -92,27 +92,53 @@ def run_applypilot(ctx, input: dict):
         init_db()
         ctx.log("ApplyPilot configured and database initialized")
 
+    from applypilot.database import get_stats
+
     for stage_name in stages:
         with ctx.safe_step(stage_name):
+            stats_before = get_stats()
+            ctx.log(f"Starting {stage_name}...")
+
             result = _run_stage(
                 stage_name,
                 min_score=min_score,
                 workers=workers,
                 validation_mode=validation_mode,
             )
+
+            stats_after = get_stats()
             elapsed = result.get("elapsed", 0)
             errors = result.get("errors", {})
+
             ctx.log(f"Stage '{stage_name}' completed in {elapsed:.1f}s")
             if errors:
                 ctx.log(f"Stage errors: {errors}")
+
+            # Per-stage summary for live feedback
+            total = stats_after["total"]
+            new_in_stage = stats_after["total"] - stats_before["total"]
+            if stage_name == "discover":
+                ctx.log(f"Discovery: {total} total jobs (+{new_in_stage} new)")
+            elif stage_name == "enrich":
+                ctx.log(f"Enriched: {stats_after['with_description']} jobs with full description")
+            elif stage_name == "score":
+                eligible = stats_after.get("untailored_eligible", 0) or stats_after.get("tailored", 0)
+                ctx.log(f"Scored: {stats_after['scored']} jobs | High fit (≥{min_score}): {eligible} eligible for tailoring")
+            elif stage_name == "tailor":
+                ctx.log(f"Tailored: {stats_after['tailored']} resumes")
+            elif stage_name == "cover":
+                ctx.log(f"Cover letters: {stats_after['with_cover_letter']}")
+            elif stage_name == "pdf":
+                ctx.log(f"PDFs ready: {stats_after['ready_to_apply']}")
+
             ctx.state[f"{stage_name}_completed"] = True
             ctx.state[f"{stage_name}_elapsed"] = elapsed
 
     with ctx.safe_step("collect_results"):
-        from applypilot.database import get_stats
         from applypilot.config import DB_PATH, TAILORED_DIR, COVER_LETTER_DIR
 
         stats = get_stats()
+        ctx.log(f"Jobs discovered: {stats['total']} | With description: {stats['with_description']} | Scored: {stats['scored']} | Tailored: {stats['tailored']} | Cover letters: {stats['with_cover_letter']} | Ready to apply: {stats['ready_to_apply']}")
         ctx.state["results"] = {
             "total_jobs_discovered": stats["total"],
             "jobs_with_description": stats["with_description"],
@@ -124,7 +150,7 @@ def run_applypilot(ctx, input: dict):
             "score_distribution": stats.get("score_distribution"),
             "by_site": stats.get("by_site"),
         }
-        ctx.log(f"Results: {json.dumps(ctx.state['results'])}")
+        ctx.log("Results collected; see run result payload and artifacts.")
 
         if DB_PATH.exists():
             ctx.artifact(
