@@ -1,0 +1,12 @@
+# Minimal config for local discover test (one query, one location, one board)
+queries:
+  - query: "software engineer"
+    tier: 1
+locations:
+  - location: "Remote"
+    remote: true
+defaults:
+  results_per_site: 5
+  hours_old: 168
+sites:
+  - indeed
