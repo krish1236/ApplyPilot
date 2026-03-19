@@ -40,8 +40,11 @@ RUN pip install --no-cache-dir boto3
 # Install Runforge SDK (agent-runtime)
 RUN pip install --no-cache-dir agent-runtime
 
-# Install Playwright browsers (for enrichment that might use playwright)
-RUN pip install playwright && playwright install chromium && playwright install-deps chromium
+# Playwright >=1.49: headless=True uses chromium-headless-shell (not installed by `install chromium` alone).
+# --only-shell: headless CI image. Older Playwright falls back to classic chromium install.
+RUN pip install playwright && \
+    (python -m playwright install --with-deps --only-shell chromium \
+     || python -m playwright install --with-deps chromium)
 
 # Copy source code
 COPY . .
@@ -50,5 +53,14 @@ RUN mkdir -p /root/.applypilot
 ENV APPLYPILOT_DIR=/root/.applypilot
 ENV AGENT_RUNTIME_ENV=production
 
-# Runforge SDK runs the agent (entrypoint: agent:run_applypilot)
+# Container MUST use the Runforge SDK worker so platform integration works:
+#   - Step reporting, heartbeats, artifacts, planned_steps at run_start, cancel, etc.
+#
+# Correct (this file):
+#   CMD ["python", "-m", "agent_runtime", "worker", "agent:run_applypilot"]
+#
+# Wrong — bypasses SDK; planned_steps and other tracer behavior never run:
+#   CMD ["python", "runforge_wrapper.py"]
+#
+# Runforge project entrypoint (dashboard / API): agent:run_applypilot → agent.py:run_applypilot
 CMD ["python", "-m", "agent_runtime", "worker", "agent:run_applypilot"]

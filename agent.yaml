@@ -1,6 +1,7 @@
 name: applypilot-job-agent
 entrypoint: agent:run_applypilot
 python_version: "3.11"
+# false = no Browserbase; platform build still installs local Playwright if pyproject depends on it
 browser: false
 max_concurrency: 2
 run_timeout_minutes: 60

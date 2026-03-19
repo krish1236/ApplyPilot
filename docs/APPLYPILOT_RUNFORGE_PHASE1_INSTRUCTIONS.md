@@ -1,8 +1,12 @@
 # ApplyPilot → Runforge: Phase 1 Deployment Instructions
 
+> **Superseded — do not follow for new deployments.** Production uses the **Runforge SDK** (`agent.py`, `@runtime.agent`, `planned_steps`, platform tracer). The repo **`Dockerfile`** CMD is `python -m agent_runtime worker agent:run_applypilot`. The old standalone **`runforge_wrapper.py`** was removed (it bypassed the SDK). See **`APPLYPILOT_PHASE1_SDK.md`** for the current path.
+>
+> The sections below are kept as historical context for the pre-SDK “wrapper only” experiment.
+
 ## Purpose
 
-This document gives a Cursor AI coding agent step-by-step instructions to deploy the ApplyPilot job application agent on the Runforge platform **without integrating the Runforge SDK**. The goal is to get ApplyPilot running as a containerized agent on Runforge's existing infrastructure (EC2 + Docker + Browserbase), triggered via API, with results visible in the dashboard.
+This document gave step-by-step instructions to deploy ApplyPilot **without** the Runforge SDK (a standalone HTTP-reporting wrapper). That approach is **no longer used** in this fork.
 
 Phase 2 (separate document) will wrap the pipeline in the Runforge SDK with safe/commit steps, approvals, and observability.
 
@@ -177,9 +181,9 @@ CMD ["applypilot", "run"]
 
 ---
 
-## Step 3: Create the API Wrapper
+## Step 3: Create the API Wrapper *(obsolete)*
 
-Create `runforge_wrapper.py` in the repo root. This wraps ApplyPilot's CLI as an API-triggerable service that reports results back to the Runforge platform.
+**Do not create this file.** It was removed from the fork. Use **`agent.py`** + SDK worker CMD instead. The following code block is left only as reference for what the old wrapper did.
 
 ```python
 """
@@ -477,14 +481,15 @@ if __name__ == "__main__":
 
 ---
 
-## Step 4: Update the Dockerfile CMD
+## Step 4: Dockerfile CMD (historical — wrong for current repo)
 
-Change the last line of the Dockerfile:
+**Current repo:** use the SDK worker only:
 
 ```dockerfile
-# Runforge wrapper is the entry point
-CMD ["python", "runforge_wrapper.py"]
+CMD ["python", "-m", "agent_runtime", "worker", "agent:run_applypilot"]
 ```
+
+Do **not** use `CMD ["python", "runforge_wrapper.py"]` — that bypassed the SDK and is removed.
 
 ---
 
@@ -593,13 +598,13 @@ These are explicitly deferred to Phase 2 (Runforge SDK integration):
 
 ## File Summary
 
-After Phase 1, the repo should have these new/modified files:
+Current fork layout (SDK path — `runforge_wrapper.py` removed):
 
 ```
 ApplyPilot/
-├── Dockerfile                  # NEW — container build instructions
-├── runforge_wrapper.py         # NEW — Runforge entry point and reporting
-├── pyproject.toml              # UNCHANGED
+├── Dockerfile                  # CMD: agent_runtime worker agent:run_applypilot
+├── agent.py                    # SDK agent + planned_steps
+├── pyproject.toml              # entrypoint agent:run_applypilot
 ├── src/applypilot/             # UNCHANGED — no modifications to ApplyPilot core
 │   ├── cli.py
 │   ├── config.py
@@ -615,7 +620,7 @@ ApplyPilot/
 └── ...
 ```
 
-**Critical rule: Do NOT modify any file under `src/applypilot/` in Phase 1.** The wrapper sits outside the core package and calls it programmatically. This keeps the fork clean and mergeable with upstream changes.
+**Critical rule: Do NOT modify any file under `src/applypilot/`.** The SDK agent in `agent.py` calls the package programmatically.
 
 ---
 
@@ -635,4 +640,4 @@ Phase 1 is complete when:
 - [ ] Cover letter PDFs are downloadable as artifacts
 - [ ] SQLite DB is downloadable as artifact (for debugging)
 - [ ] Run result shows job counts in the dashboard
-- [ ] No modifications to `src/applypilot/` — wrapper is fully external
+- [ ] No modifications to `src/applypilot/` — integration is via `agent.py` only
