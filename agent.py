@@ -13,6 +13,16 @@ from agent_runtime import AgentRuntime
 
 runtime = AgentRuntime()
 
+_DEFAULT_STAGES = ["discover", "enrich", "score", "tailor", "cover", "pdf"]
+
+
+def _applypilot_planned_steps(inp: dict) -> list[str]:
+    """Match run_applypilot: setup → each stage from input (or defaults) → collect_results."""
+    stages = inp.get("stages", list(_DEFAULT_STAGES))
+    if isinstance(stages, str):
+        stages = [stages]
+    return ["setup", *list(stages), "collect_results"]
+
 
 def _setup_applypilot(input_payload: dict) -> None:
     """Write ApplyPilot config files from the run input payload.
@@ -72,25 +82,34 @@ def _run_stage(
     )
 
 
-@runtime.agent(name="applypilot-job-agent")
+@runtime.agent(name="applypilot-job-agent", planned_steps=_applypilot_planned_steps)
 def run_applypilot(ctx, input: dict):
     """Main agent. Runs ApplyPilot stages as Runforge safe steps."""
     min_score = input.get("min_score", 7)
     workers = input.get("workers", 1)
     validation_mode = input.get("validation_mode", "normal")
-    stages = input.get(
-        "stages",
-        ["discover", "enrich", "score", "tailor", "cover", "pdf"],
-    )
+    stages = input.get("stages", list(_DEFAULT_STAGES))
 
     with ctx.safe_step("setup"):
         _setup_applypilot(input)
-        from applypilot.config import load_env, ensure_dirs
+        from applypilot.config import DB_PATH, load_env, ensure_dirs
         from applypilot.database import init_db
+
+        # Phase E: restore persistent DB snapshot from Runforge storage.
+        restored = ctx.storage.get_file("applypilot.db")
+        if restored:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            DB_PATH.write_bytes(restored)
+            ctx.log(
+                f"Storage restore: loaded applypilot.db ({len(restored):,} bytes) from persistent storage"
+            )
+        else:
+            ctx.log("Storage restore: no previous applypilot.db found (first run or cleared storage)")
+
         load_env()
         ensure_dirs()
         init_db()
-        ctx.log("ApplyPilot configured and database initialized")
+        ctx.log("ApplyPilot configured and database initialized (schema ensured)")
 
     from applypilot.database import get_stats
 
@@ -153,9 +172,18 @@ def run_applypilot(ctx, input: dict):
         ctx.log("Results collected; see run result payload and artifacts.")
 
         if DB_PATH.exists():
+            db_bytes = DB_PATH.read_bytes()
+            ctx.storage.put_file(
+                "applypilot.db",
+                db_bytes,
+                content_type="application/x-sqlite3",
+            )
+            ctx.log(
+                f"Storage persist: saved applypilot.db ({len(db_bytes):,} bytes) to persistent storage"
+            )
             ctx.artifact(
                 "applypilot.db",
-                DB_PATH.read_bytes(),
+                db_bytes,
                 content_type="application/x-sqlite3",
             )
         if TAILORED_DIR.exists():
