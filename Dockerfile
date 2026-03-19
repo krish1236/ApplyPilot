@@ -26,8 +26,8 @@ ENV CHROME_PATH=/usr/bin/google-chrome-stable
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY pyproject.toml .
+# Install Python dependencies (README.md required by pyproject.toml for metadata)
+COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir -e .
 
 # Install python-jobspy separately (broken numpy pin)
