@@ -1,7 +1,69 @@
 name: applypilot-job-agent
 entrypoint: agent:run_applypilot
 python_version: "3.11"
-# false = no Browserbase; platform build still installs local Playwright if pyproject depends on it
 browser: false
 max_concurrency: 2
 run_timeout_minutes: 60
+
+# Experience-layer inputs (dashboard form + Advanced JSON).
+# Paste JSON in the text areas; optional resume file overrides resume_text for disk copy.
+inputs:
+  - id: resume
+    type: file
+    label: Resume file (optional; PDF or plain text — overrides resume_text if set)
+    required: false
+
+  - id: profile_json
+    type: text
+    label: >
+      Profile JSON (maps to profile.json). Example top-level keys personal, experience,
+      skills_boundary, resume_facts.
+    required: false
+
+  - id: resume_text
+    type: text
+    label: >
+      Resume as plain text (maps to resume.txt). Use if you are not uploading a file.
+    required: false
+
+  - id: searches_json
+    type: text
+    label: >
+      Searches JSON (maps to searches.yaml) — queries, locations, sites, defaults.
+    required: false
+
+  - id: stages_json
+    type: text
+    label: 'Pipeline stages JSON array, e.g. ["discover"] or full six stages'
+    required: false
+
+  - id: min_score
+    type: number
+    label: Minimum fit score (1–10)
+    required: false
+
+  - id: workers
+    type: number
+    label: Worker count for pipeline stages
+    required: false
+
+  - id: validation_mode
+    type: string
+    label: Validation mode (e.g. normal)
+    required: false
+
+outputs:
+  - key: summary
+    type: stats
+    label: Pipeline summary (counts, distributions)
+
+  - key: recent_jobs
+    type: table
+    label: Sample of discovered jobs (title, site, location, score, url)
+
+chat:
+  system: |
+    You help users run ApplyPilot on Runforge: discover jobs, enrich, score, tailor resumes,
+    cover letters, and PDFs. Explain stages briefly, suggest min_score and workflow tips,
+    and remind users that profile / searches / resume can be pasted as JSON or text fields,
+    or supplied via Advanced JSON on Trigger Run.

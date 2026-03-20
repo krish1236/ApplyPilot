@@ -1,0 +1,51 @@
+{
+  "_comment": "Use either: (1) Trigger Run → Advanced JSON with this whole object as run input, or (2) paste each top-level value into the matching form field (profile_json, resume_text, searches_json, stages_json).",
+  "profile": {
+    "personal": {
+      "full_name": "Your Name",
+      "email": "you@example.com",
+      "phone": "",
+      "city": "Your City",
+      "province_state": "",
+      "country": "USA",
+      "linkedin_url": "",
+      "github_url": ""
+    },
+    "experience": {
+      "years_of_experience_total": "5",
+      "education_level": "Bachelor's in Computer Science",
+      "current_title": "Software Engineer",
+      "target_role": "Software Engineer"
+    },
+    "skills_boundary": {
+      "programming_languages": ["Python", "JavaScript"],
+      "frameworks": ["FastAPI"],
+      "tools": ["AWS", "Docker", "Git"]
+    },
+    "resume_facts": {
+      "preserved_companies": ["Company A", "Company B"],
+      "preserved_projects": [],
+      "preserved_school": "Your University",
+      "real_metrics": []
+    }
+  },
+  "resume_text": "YOUR NAME\nSoftware Engineer\n\nEXPERIENCE\nSoftware Engineer at Company A (2022–Present)\n- Built APIs with Python and FastAPI.\n- Deployed services on AWS.\n\nSoftware Engineer at Company B (2020–2022)\n- Developed backend services.\n\nEDUCATION\nBachelor's in Computer Science, Your University",
+  "searches": {
+    "queries": [
+      { "query": "Software Engineer", "tier": 1 },
+      { "query": "Backend Engineer", "tier": 1 }
+    ],
+    "locations": [
+      { "location": "Remote", "remote": true }
+    ],
+    "sites": ["indeed"],
+    "defaults": {
+      "results_per_site": 20,
+      "hours_old": 72
+    }
+  },
+  "stages": ["discover"],
+  "min_score": 7,
+  "workers": 1,
+  "validation_mode": "normal"
+}

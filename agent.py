@@ -24,6 +24,61 @@ def _applypilot_planned_steps(inp: dict) -> list[str]:
     return ["setup", *list(stages), "collect_results"]
 
 
+def _parse_experience_json_strings(d: dict) -> None:
+    """Turn dashboard textarea JSON into objects before setup / stages (Runforge experience inputs)."""
+    for src, dest in (
+        ("profile_json", "profile"),
+        ("searches_json", "searches"),
+    ):
+        raw = d.get(src)
+        if isinstance(raw, str) and raw.strip():
+            try:
+                d[dest] = json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+
+    stj = d.get("stages_json")
+    if isinstance(stj, str) and stj.strip():
+        try:
+            parsed = json.loads(stj)
+            if isinstance(parsed, list):
+                d["stages"] = parsed
+        except json.JSONDecodeError:
+            pass
+
+    st = d.get("stages")
+    if isinstance(st, str) and st.strip().startswith("["):
+        try:
+            parsed = json.loads(st)
+            if isinstance(parsed, list):
+                d["stages"] = parsed
+        except json.JSONDecodeError:
+            pass
+
+
+def _apply_experience_inputs(input_payload: dict) -> None:
+    """Map uploaded resume file path into ApplyPilot resume.txt / resume.pdf."""
+    from applypilot.config import RESUME_PATH, RESUME_PDF_PATH
+
+    resume_path = input_payload.get("resume")
+    if isinstance(resume_path, str) and resume_path.strip():
+        p = Path(resume_path)
+        if p.is_file():
+            suf = p.suffix.lower()
+            if suf == ".pdf":
+                RESUME_PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
+                RESUME_PDF_PATH.write_bytes(p.read_bytes())
+            else:
+                RESUME_PATH.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    RESUME_PATH.write_text(
+                        p.read_text(encoding="utf-8"),
+                        encoding="utf-8",
+                    )
+                except UnicodeDecodeError:
+                    RESUME_PATH.write_bytes(p.read_bytes())
+
+
 def _setup_applypilot(input_payload: dict) -> None:
     """Write ApplyPilot config files from the run input payload.
 
@@ -32,7 +87,6 @@ def _setup_applypilot(input_payload: dict) -> None:
     """
     import yaml
     from applypilot.config import (
-        APP_DIR,
         PROFILE_PATH,
         RESUME_PATH,
         SEARCH_CONFIG_PATH,
@@ -41,6 +95,7 @@ def _setup_applypilot(input_payload: dict) -> None:
     )
 
     ensure_dirs()
+    _apply_experience_inputs(input_payload)
 
     if "profile" in input_payload:
         PROFILE_PATH.write_text(
@@ -85,13 +140,18 @@ def _run_stage(
 @runtime.agent(name="applypilot-job-agent", planned_steps=_applypilot_planned_steps)
 def run_applypilot(ctx, input: dict):
     """Main agent. Runs ApplyPilot stages as Runforge safe steps."""
-    min_score = input.get("min_score", 7)
-    workers = input.get("workers", 1)
-    validation_mode = input.get("validation_mode", "normal")
-    stages = input.get("stages", list(_DEFAULT_STAGES))
+    effective = {**(input or {}), **dict(ctx.inputs)}
+    _parse_experience_json_strings(effective)
+
+    min_score = effective.get("min_score", 7)
+    workers = effective.get("workers", 1)
+    validation_mode = effective.get("validation_mode", "normal")
+    stages = effective.get("stages", list(_DEFAULT_STAGES))
+    if not isinstance(stages, list):
+        stages = list(_DEFAULT_STAGES)
 
     with ctx.safe_step("setup"):
-        _setup_applypilot(input)
+        _setup_applypilot(effective)
         from applypilot.config import DB_PATH, load_env, ensure_dirs
         from applypilot.database import init_db
 
@@ -169,6 +229,29 @@ def run_applypilot(ctx, input: dict):
             "score_distribution": stats.get("score_distribution"),
             "by_site": stats.get("by_site"),
         }
+        try:
+            ctx.results.set_stats(dict(ctx.state["results"]))
+        except Exception:
+            pass
+
+        try:
+            from applypilot.database import get_jobs_by_stage
+
+            rows = get_jobs_by_stage(stage="discovered", limit=50)
+            table = [
+                {
+                    "title": r.get("title"),
+                    "site": r.get("site"),
+                    "location": r.get("location"),
+                    "fit_score": r.get("fit_score"),
+                    "url": r.get("url"),
+                }
+                for r in rows
+            ]
+            ctx.results.set_table("recent_jobs", table)
+        except Exception:
+            pass
+
         ctx.log("Results collected; see run result payload and artifacts.")
 
         if DB_PATH.exists():
