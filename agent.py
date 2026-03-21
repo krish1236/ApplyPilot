@@ -11,6 +11,8 @@ from pathlib import Path
 
 from agent_runtime import AgentRuntime
 
+from build_config import build_config as build_applypilot_config
+
 runtime = AgentRuntime()
 
 _DEFAULT_STAGES = ["discover", "enrich", "score", "tailor", "cover", "pdf"]
@@ -54,6 +56,33 @@ def _parse_experience_json_strings(d: dict) -> None:
                 d["stages"] = parsed
         except json.JSONDecodeError:
             pass
+
+
+def _merge_experience_into_effective(effective: dict) -> None:
+    """Apply legacy JSON fields, then build_config() for Runforge form → ApplyPilot shape."""
+    _parse_experience_json_strings(effective)
+    cfg = build_applypilot_config(effective)
+    if not isinstance(effective.get("profile"), dict):
+        effective["profile"] = cfg["profile"]
+    if not isinstance(effective.get("searches"), dict):
+        effective["searches"] = cfg["searches"]
+    rt = effective.get("resume_text")
+    if not (isinstance(rt, str) and rt.strip()) and cfg.get("resume_text"):
+        effective["resume_text"] = cfg["resume_text"]
+    st = effective.get("stages")
+    if not isinstance(st, list) or len(st) == 0:
+        effective["stages"] = cfg["stages"]
+    try:
+        effective["min_score"] = int(effective.get("min_score", cfg["min_score"]))
+    except (TypeError, ValueError):
+        effective["min_score"] = int(cfg["min_score"])
+    try:
+        effective["workers"] = int(effective.get("workers", cfg.get("workers", 1)))
+    except (TypeError, ValueError):
+        effective["workers"] = int(cfg.get("workers", 1))
+    effective["validation_mode"] = str(
+        effective.get("validation_mode", cfg.get("validation_mode", "normal"))
+    )
 
 
 def _apply_experience_inputs(input_payload: dict) -> None:
@@ -141,7 +170,7 @@ def _run_stage(
 def run_applypilot(ctx, input: dict):
     """Main agent. Runs ApplyPilot stages as Runforge safe steps."""
     effective = {**(input or {}), **dict(ctx.inputs)}
-    _parse_experience_json_strings(effective)
+    _merge_experience_into_effective(effective)
 
     min_score = effective.get("min_score", 7)
     workers = effective.get("workers", 1)
@@ -217,15 +246,29 @@ def run_applypilot(ctx, input: dict):
         from applypilot.config import DB_PATH, TAILORED_DIR, COVER_LETTER_DIR
 
         stats = get_stats()
+        from applypilot.database import get_connection
+
+        conn = get_connection()
+        high_match = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL AND fit_score >= ?",
+            (int(min_score),),
+        ).fetchone()[0]
+
         ctx.log(f"Jobs discovered: {stats['total']} | With description: {stats['with_description']} | Scored: {stats['scored']} | Tailored: {stats['tailored']} | Cover letters: {stats['with_cover_letter']} | Ready to apply: {stats['ready_to_apply']}")
         ctx.state["results"] = {
             "total_jobs_discovered": stats["total"],
+            "total_discovered": stats["total"],
             "jobs_with_description": stats["with_description"],
+            "with_description": stats["with_description"],
             "jobs_scored": stats["scored"],
+            "scored": stats["scored"],
+            "high_match": high_match,
             "jobs_tailored": stats["tailored"],
+            "tailored": stats["tailored"],
             "jobs_with_cover_letter": stats["with_cover_letter"],
             "jobs_ready_to_apply": stats["ready_to_apply"],
             "jobs_applied": stats["applied"],
+            "applied": stats["applied"],
             "score_distribution": stats.get("score_distribution"),
             "by_site": stats.get("by_site"),
         }
@@ -237,18 +280,28 @@ def run_applypilot(ctx, input: dict):
         try:
             from applypilot.database import get_jobs_by_stage
 
-            rows = get_jobs_by_stage(stage="discovered", limit=50)
-            table = [
-                {
-                    "title": r.get("title"),
-                    "site": r.get("site"),
-                    "location": r.get("location"),
-                    "fit_score": r.get("fit_score"),
-                    "url": r.get("url"),
-                }
-                for r in rows
-            ]
-            ctx.results.set_table("recent_jobs", table)
+            rows = get_jobs_by_stage(stage="discovered", limit=100)
+            table = []
+            for r in rows:
+                title = (r.get("title") or "").strip()
+                company = ""
+                if " at " in title:
+                    parts = title.split(" at ", 1)
+                    if len(parts) == 2:
+                        company = parts[1].strip()
+                table.append(
+                    {
+                        "company": company,
+                        "title": title,
+                        "fit_score": r.get("fit_score"),
+                        "salary": r.get("salary"),
+                        "location": r.get("location"),
+                        "source": r.get("site"),
+                        "apply_status": r.get("apply_status") or "—",
+                        "url": r.get("url"),
+                    }
+                )
+            ctx.results.set_table("jobs", table)
         except Exception:
             pass
 

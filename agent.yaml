@@ -1,3 +1,7 @@
+# agent.yaml — ApplyPilot on Runforge
+# Clean user-facing inputs. build_config.build_config() maps them to profile.json / searches.yaml.
+# Translation lives in build_config.py (not in this file).
+
 name: applypilot-job-agent
 entrypoint: agent:run_applypilot
 python_version: "3.11"
@@ -5,65 +9,275 @@ browser: false
 max_concurrency: 2
 run_timeout_minutes: 60
 
-# Experience-layer inputs (dashboard form + Advanced JSON).
-# Paste JSON in the text areas; optional resume file overrides resume_text for disk copy.
+storage:
+  enabled: true
+  files:
+    - key: applypilot.db
+      description: Job database persisted across runs
+
+planned_steps:
+  - name: setup
+    description: Load config and restore previous data
+  - name: discover
+    description: Find jobs from job boards and company sites
+  - name: enrich
+    description: Fetch full job descriptions
+  - name: score
+    description: Score each job by resume fit (1-10)
+  - name: collect_results
+    description: Gather results and save data
+
 inputs:
   - id: resume
     type: file
-    label: Resume file (optional; PDF or plain text — overrides resume_text if set)
+    label: Resume
+    description: Upload your current resume. Used to score job matches and tailor applications.
+    required: true
+
+  - id: full_name
+    type: string
+    label: Full name
+    placeholder: e.g. Krishna Patel
+    required: true
+
+  - id: email
+    type: string
+    label: Email
+    placeholder: e.g. you@example.com
+    required: true
+
+  - id: phone
+    type: string
+    label: Phone
+    placeholder: e.g. +1 555-123-4567
     required: false
 
-  - id: profile_json
-    type: text
-    label: >
-      Profile JSON (maps to profile.json). Example top-level keys personal, experience,
-      skills_boundary, resume_facts.
+  - id: city
+    type: string
+    label: Current city
+    placeholder: e.g. Austin, TX
     required: false
 
-  - id: resume_text
-    type: text
-    label: >
-      Resume as plain text (maps to resume.txt). Use if you are not uploading a file.
+  - id: linkedin_url
+    type: string
+    label: LinkedIn URL
+    placeholder: e.g. https://linkedin.com/in/yourname
     required: false
 
-  - id: searches_json
-    type: text
-    label: >
-      Searches JSON (maps to searches.yaml) — queries, locations, sites, defaults.
+  - id: github_url
+    type: string
+    label: GitHub URL
+    placeholder: e.g. https://github.com/yourname
     required: false
 
-  - id: stages_json
+  - id: current_title
+    type: string
+    label: Current job title
+    placeholder: e.g. Senior Software Engineer
+    required: true
+
+  - id: years_experience
+    type: select
+    label: Years of experience
+    options:
+      - value: "1"
+        description: Less than 1 year
+      - value: "2"
+        description: 1-2 years
+      - value: "3"
+        description: 3-4 years
+      - value: "5"
+        description: 5-7 years
+      - value: "8"
+        description: 8-10 years
+      - value: "12"
+        description: 10+ years
+    default: "5"
+
+  - id: education
+    type: select
+    label: Education
+    options:
+      - value: High School
+      - value: Associate's
+      - value: Bachelor's in Computer Science
+      - value: Bachelor's (other)
+      - value: Master's in Computer Science
+      - value: Master's (other)
+      - value: PhD
+      - value: Bootcamp / Self-taught
+    default: "Bachelor's in Computer Science"
+
+  - id: target_roles
     type: text
-    label: 'Pipeline stages JSON array, e.g. ["discover"] or full six stages'
+    label: Target job titles
+    description: Comma-separated list of roles you want to apply for.
+    placeholder: e.g. Software Engineer, Backend Engineer, Platform Engineer
+    required: true
+
+  - id: locations
+    type: text
+    label: Preferred locations
+    description: Where you want to work. Include 'Remote' if open to it.
+    placeholder: e.g. Remote, Austin TX, San Francisco
+    required: true
+
+  - id: experience_level
+    type: select
+    label: Target experience level
+    description: What level of roles should the agent search for?
+    options:
+      - value: entry
+        description: Entry level — junior, new grad, associate
+      - value: mid
+        description: Mid level — 2-5 years, independent contributor
+      - value: senior
+        description: Senior — 5+ years, leads projects and mentors
+      - value: staff
+        description: Staff+ — 8+ years, cross-team technical impact
+      - value: manager
+        description: Manager — people management, engineering leadership
+    default: senior
+
+  - id: min_salary
+    type: string
+    label: Minimum salary
+    description: Skip jobs below this compensation. Leave blank to see everything.
+    placeholder: e.g. $150,000
     required: false
+
+  - id: programming_languages
+    type: text
+    label: Programming languages
+    description: Comma-separated. Used for scoring and resume tailoring.
+    placeholder: e.g. Python, JavaScript, TypeScript, Go
+    required: true
+
+  - id: frameworks
+    type: text
+    label: Frameworks & libraries
+    placeholder: e.g. FastAPI, React, Django, Spring Boot
+    required: false
+
+  - id: tools
+    type: text
+    label: Tools & platforms
+    placeholder: e.g. AWS, Docker, Kubernetes, Git, Terraform
+    required: false
+
+  - id: avoid
+    type: text
+    label: Companies or industries to avoid
+    description: The agent will skip jobs matching these. Comma-separated.
+    placeholder: e.g. defense, gambling, crypto, agencies
+    required: false
+
+  - id: job_sources
+    type: multiselect
+    label: Job sources to search
+    description: Which job boards and portals should the agent check?
+    options:
+      - value: indeed
+        description: Indeed — large general job board
+      - value: linkedin
+        description: LinkedIn — professional network jobs
+      - value: workday
+        description: Workday — corporate career portals
+      - value: greenhouse
+        description: Greenhouse — startup/tech company portals
+      - value: lever
+        description: Lever — startup/tech company portals
+    default:
+      - workday
+      - indeed
 
   - id: min_score
-    type: number
-    label: Minimum fit score (1–10)
-    required: false
-
-  - id: workers
-    type: number
-    label: Worker count for pipeline stages
-    required: false
-
-  - id: validation_mode
-    type: string
-    label: Validation mode (e.g. normal)
-    required: false
+    type: select
+    label: Minimum match score
+    description: Only process jobs scoring at or above this threshold (1-10).
+    options:
+      - value: "5"
+        description: 5 — cast a wide net
+      - value: "6"
+        description: 6 — moderate filter
+      - value: "7"
+        description: 7 — good balance (recommended)
+      - value: "8"
+        description: 8 — high match only
+      - value: "9"
+        description: 9 — very strict
+    default: "7"
 
 outputs:
   - key: summary
     type: stats
-    label: Pipeline summary (counts, distributions)
+    label: Run summary
+    metrics:
+      - key: total_discovered
+        label: Jobs discovered
+      - key: with_description
+        label: Enriched
+      - key: scored
+        label: Scored
+      - key: high_match
+        label: High match
+        highlight: true
+      - key: tailored
+        label: Resumes tailored
+      - key: applied
+        label: Applied
+        highlight: true
 
-  - key: recent_jobs
+  - key: jobs
     type: table
-    label: Sample of discovered jobs (title, site, location, score, url)
+    label: Jobs found
+    columns:
+      - key: company
+        label: Company
+        bold: true
+      - key: title
+        label: Role
+      - key: fit_score
+        label: Match
+        format: score
+      - key: salary
+        label: Salary
+      - key: location
+        label: Location
+      - key: source
+        label: Source
+      - key: apply_status
+        label: Status
+        format: status_pill
+      - key: url
+        label: Link
+        format: link
+    sortable: true
+    filterable: true
+    default_sort: fit_score
+    default_sort_order: desc
 
 chat:
+  enabled: true
+  description: Ask about your job search results, filter jobs, or update preferences.
+  context:
+    - results.jobs
+    - results.summary
+    - inputs
+    - run_history
+  actions:
+    - name: update_preference
+      description: Update a job search preference for future runs
+      params:
+        key: string
+        value: string
+    - name: trigger_run
+      description: Start a new job search run with current preferences
+    - name: filter_results
+      description: Filter the displayed jobs table
+      params:
+        field: string
+        operator: string
+        value: string
   system: |
-    You help users run ApplyPilot on Runforge: discover jobs, enrich, score, tailor resumes,
-    cover letters, and PDFs. Explain stages briefly, suggest min_score and workflow tips,
-    and remind users that profile / searches / resume can be pasted as JSON or text fields,
-    or supplied via Advanced JSON on Trigger Run.
+    You help users run ApplyPilot on Runforge (discover, enrich, score jobs). You do not see live run data unless the product passes it into chat; answer from general guidance and agent.yaml intent.
