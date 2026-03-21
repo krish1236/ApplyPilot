@@ -173,7 +173,7 @@ def _materialize_applypilot_workspace(ctx, effective: dict) -> None:
 
 
 def _reset_failed_scores_for_rescoring() -> int:
-    """Clear fit fields for rows that were 'scored' but are LLM failures or empty error rows."""
+    """Clear fit fields for rows that were 'scored' but are LLM failures, empty errors, or no-resume rows."""
     from applypilot.database import get_connection
 
     conn = get_connection()
@@ -191,6 +191,8 @@ def _reset_failed_scores_for_rescoring() -> int:
             OR score_reasoning LIKE '%503%'
             OR score_reasoning LIKE '%timeout%'
             OR score_reasoning LIKE '%Timeout%'
+            OR score_reasoning LIKE '%resume was not provided%'
+            OR score_reasoning LIKE '%cannot assess%'
             OR (IFNULL(fit_score, 0) = 0 AND (score_reasoning IS NULL OR TRIM(score_reasoning) = ''))
           )
         """

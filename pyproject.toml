@@ -26,6 +26,9 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "pandas>=2.0",
+    # Resume PDF text extraction (build_config._read_resume); required in Docker for uploaded resumes
+    "pdfplumber>=0.11.0",
+    "PyPDF2>=3.0.0",
     ]
 
 [project.optional-dependencies]
