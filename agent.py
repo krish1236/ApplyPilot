@@ -7,11 +7,12 @@ No modifications to src/applypilot/.
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 from agent_runtime import AgentRuntime
 
-from build_config import build_config as build_applypilot_config
+from build_config import _read_resume, build_config as build_applypilot_config
 
 runtime = AgentRuntime()
 
@@ -108,38 +109,102 @@ def _apply_experience_inputs(input_payload: dict) -> None:
                     RESUME_PATH.write_bytes(p.read_bytes())
 
 
+def _materialize_applypilot_workspace(effective: dict) -> None:
+    """Ensure ~/.applypilot (APPLYPILOT_DIR) has resume.txt, profile.json, searches.yaml.
+
+    The scorer reads RESUME_PATH (resume.txt). Uploaded Runforge paths may differ; build_config
+    provides resume_path / resume_text after merge.
+    """
+    import yaml
+    from applypilot.config import PROFILE_PATH, RESUME_PATH, SEARCH_CONFIG_PATH, ensure_dirs
+
+    ensure_dirs()
+    cfg = build_applypilot_config(effective)
+
+    resume_path = cfg.get("resume_path")
+    if not (isinstance(resume_path, str) and resume_path.strip()):
+        r = effective.get("resume")
+        resume_path = r.strip() if isinstance(r, str) and r.strip() else None
+    else:
+        resume_path = resume_path.strip()
+
+    if resume_path and Path(resume_path).is_file():
+        suf = Path(resume_path).suffix.lower()
+        RESUME_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if suf == ".pdf" or suf == ".docx":
+            text = _read_resume(resume_path) or ""
+            RESUME_PATH.write_text(text, encoding="utf-8")
+        else:
+            try:
+                RESUME_PATH.write_text(
+                    Path(resume_path).read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+            except UnicodeDecodeError:
+                shutil.copy2(resume_path, RESUME_PATH)
+    else:
+        text = effective.get("resume_text") if isinstance(effective.get("resume_text"), str) else ""
+        if not text.strip():
+            text = cfg.get("resume_text") or ""
+        if isinstance(text, str) and text.strip():
+            RESUME_PATH.parent.mkdir(parents=True, exist_ok=True)
+            RESUME_PATH.write_text(text, encoding="utf-8")
+
+    profile = effective.get("profile")
+    if not isinstance(profile, dict):
+        profile = cfg.get("profile")
+    if isinstance(profile, dict):
+        PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+
+    searches = effective.get("searches")
+    if not isinstance(searches, dict):
+        searches = cfg.get("searches")
+    if isinstance(searches, dict):
+        SEARCH_CONFIG_PATH.write_text(
+            yaml.dump(searches, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+
+def _reset_failed_scores_for_rescoring() -> int:
+    """Clear fit fields for rows that were 'scored' but are LLM failures or empty error rows."""
+    from applypilot.database import get_connection
+
+    conn = get_connection()
+    cur = conn.execute(
+        """
+        UPDATE jobs
+        SET fit_score = NULL, score_reasoning = NULL, scored_at = NULL
+        WHERE scored_at IS NOT NULL
+          AND (
+            score_reasoning LIKE '%LLM error%'
+            OR score_reasoning LIKE '%429%'
+            OR score_reasoning LIKE '%404%'
+            OR score_reasoning LIKE '%rate limit%'
+            OR score_reasoning LIKE '%Rate limit%'
+            OR score_reasoning LIKE '%503%'
+            OR score_reasoning LIKE '%timeout%'
+            OR score_reasoning LIKE '%Timeout%'
+            OR (IFNULL(fit_score, 0) = 0 AND (score_reasoning IS NULL OR TRIM(score_reasoning) = ''))
+          )
+        """
+    )
+    n = cur.rowcount
+    conn.commit()
+    return n
+
+
 def _setup_applypilot(input_payload: dict) -> None:
     """Write ApplyPilot config files from the run input payload.
 
     ApplyPilot expects files in APPLYPILOT_DIR (~/.applypilot or env):
       - profile.json, resume.txt, searches.yaml, .env (LLM keys)
     """
-    import yaml
-    from applypilot.config import (
-        PROFILE_PATH,
-        RESUME_PATH,
-        SEARCH_CONFIG_PATH,
-        ENV_PATH,
-        ensure_dirs,
-    )
+    from applypilot.config import ENV_PATH, ensure_dirs
 
     ensure_dirs()
     _apply_experience_inputs(input_payload)
-
-    if "profile" in input_payload:
-        PROFILE_PATH.write_text(
-            json.dumps(input_payload["profile"], indent=2),
-            encoding="utf-8",
-        )
-
-    if "resume_text" in input_payload:
-        RESUME_PATH.write_text(input_payload["resume_text"], encoding="utf-8")
-
-    if "searches" in input_payload:
-        SEARCH_CONFIG_PATH.write_text(
-            yaml.dump(input_payload["searches"], default_flow_style=False),
-            encoding="utf-8",
-        )
+    _materialize_applypilot_workspace(input_payload)
 
     env_lines = []
     for key in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL", "LLM_MODEL", "CAPSOLVER_API_KEY"):
@@ -207,6 +272,13 @@ def run_applypilot(ctx, input: dict):
             stats_before = get_stats()
             ctx.log(f"Starting {stage_name}...")
 
+            if stage_name == "score":
+                reset_n = _reset_failed_scores_for_rescoring()
+                if reset_n > 0:
+                    ctx.log(
+                        f"Reset {reset_n} job(s) with failed/empty scores (e.g. LLM errors) for re-scoring"
+                    )
+
             result = _run_stage(
                 stage_name,
                 min_score=min_score,
@@ -244,64 +316,93 @@ def run_applypilot(ctx, input: dict):
 
     with ctx.safe_step("collect_results"):
         from applypilot.config import DB_PATH, TAILORED_DIR, COVER_LETTER_DIR
-
-        stats = get_stats()
         from applypilot.database import get_connection
 
         conn = get_connection()
-        high_match = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL AND fit_score >= ?",
-            (int(min_score),),
-        ).fetchone()[0]
+        min_s = int(min_score)
 
-        ctx.log(f"Jobs discovered: {stats['total']} | With description: {stats['with_description']} | Scored: {stats['scored']} | Tailored: {stats['tailored']} | Cover letters: {stats['with_cover_letter']} | Ready to apply: {stats['ready_to_apply']}")
+        # Stats aligned with agent.yaml outputs.summary.metrics
+        summary_stats = {
+            "total_discovered": conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0],
+            "with_description": conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE full_description IS NOT NULL"
+            ).fetchone()[0],
+            "scored": conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL AND fit_score > 0"
+            ).fetchone()[0],
+            "high_match": conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL AND fit_score >= ?",
+                (min_s,),
+            ).fetchone()[0],
+            "tailored": conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL"
+            ).fetchone()[0],
+            "applied": conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE applied_at IS NOT NULL"
+            ).fetchone()[0],
+        }
+
+        extra = get_stats()
+        ctx.log(
+            f"Jobs discovered: {summary_stats['total_discovered']} | "
+            f"With description: {summary_stats['with_description']} | "
+            f"Scored (>0): {summary_stats['scored']} | "
+            f"High fit (≥{min_s}): {summary_stats['high_match']} | "
+            f"Tailored: {summary_stats['tailored']} | "
+            f"Applied: {summary_stats['applied']} | "
+            f"Cover letters: {extra.get('with_cover_letter', 0)} | "
+            f"Ready to apply: {extra.get('ready_to_apply', 0)}"
+        )
+
         ctx.state["results"] = {
-            "total_jobs_discovered": stats["total"],
-            "total_discovered": stats["total"],
-            "jobs_with_description": stats["with_description"],
-            "with_description": stats["with_description"],
-            "jobs_scored": stats["scored"],
-            "scored": stats["scored"],
-            "high_match": high_match,
-            "jobs_tailored": stats["tailored"],
-            "tailored": stats["tailored"],
-            "jobs_with_cover_letter": stats["with_cover_letter"],
-            "jobs_ready_to_apply": stats["ready_to_apply"],
-            "jobs_applied": stats["applied"],
-            "applied": stats["applied"],
-            "score_distribution": stats.get("score_distribution"),
-            "by_site": stats.get("by_site"),
+            **summary_stats,
+            "total_jobs_discovered": summary_stats["total_discovered"],
+            "jobs_with_description": summary_stats["with_description"],
+            "jobs_scored": summary_stats["scored"],
+            "jobs_tailored": summary_stats["tailored"],
+            "jobs_applied": summary_stats["applied"],
+            "jobs_with_cover_letter": extra.get("with_cover_letter", 0),
+            "jobs_ready_to_apply": extra.get("ready_to_apply", 0),
+            "score_distribution": extra.get("score_distribution"),
+            "by_site": extra.get("by_site"),
         }
         try:
-            ctx.results.set_stats(dict(ctx.state["results"]))
+            ctx.results.set_stats(dict(summary_stats))
         except Exception:
             pass
 
         try:
-            from applypilot.database import get_jobs_by_stage
-
-            rows = get_jobs_by_stage(stage="discovered", limit=100)
-            table = []
-            for r in rows:
-                title = (r.get("title") or "").strip()
+            rows = conn.execute(
+                """
+                SELECT url, title, salary, location, site, fit_score, apply_status
+                FROM jobs
+                WHERE fit_score IS NOT NULL AND fit_score > 0
+                ORDER BY fit_score DESC
+                LIMIT 100
+                """
+            ).fetchall()
+            jobs_table = []
+            for row in rows:
+                url, title, salary, location, site, fit_score, apply_status = row
+                title_s = (title or "").strip()
                 company = ""
-                if " at " in title:
-                    parts = title.split(" at ", 1)
+                if " at " in title_s:
+                    parts = title_s.split(" at ", 1)
                     if len(parts) == 2:
                         company = parts[1].strip()
-                table.append(
+                jobs_table.append(
                     {
                         "company": company,
-                        "title": title,
-                        "fit_score": r.get("fit_score"),
-                        "salary": r.get("salary"),
-                        "location": r.get("location"),
-                        "source": r.get("site"),
-                        "apply_status": r.get("apply_status") or "—",
-                        "url": r.get("url"),
+                        "title": title_s,
+                        "fit_score": fit_score,
+                        "salary": salary or "",
+                        "location": location or "",
+                        "source": site or "",
+                        "apply_status": apply_status or "—",
+                        "url": url,
                     }
                 )
-            ctx.results.set_table("jobs", table)
+            ctx.results.set_table("jobs", jobs_table)
         except Exception:
             pass
 
