@@ -173,33 +173,19 @@ def _materialize_applypilot_workspace(ctx, effective: dict) -> None:
 
 
 def _reset_failed_scores_for_rescoring() -> int:
-    """Clear fit fields for rows that were 'scored' but are LLM failures, empty errors, or no-resume rows."""
+    """Clear all scores so the scorer can re-run every job with the current resume on disk."""
     from applypilot.database import get_connection
 
     conn = get_connection()
-    cur = conn.execute(
+    reset_count = conn.execute(
         """
         UPDATE jobs
         SET fit_score = NULL, score_reasoning = NULL, scored_at = NULL
         WHERE scored_at IS NOT NULL
-          AND (
-            score_reasoning LIKE '%LLM error%'
-            OR score_reasoning LIKE '%429%'
-            OR score_reasoning LIKE '%404%'
-            OR score_reasoning LIKE '%rate limit%'
-            OR score_reasoning LIKE '%Rate limit%'
-            OR score_reasoning LIKE '%503%'
-            OR score_reasoning LIKE '%timeout%'
-            OR score_reasoning LIKE '%Timeout%'
-            OR score_reasoning LIKE '%resume was not provided%'
-            OR score_reasoning LIKE '%cannot assess%'
-            OR (IFNULL(fit_score, 0) = 0 AND (score_reasoning IS NULL OR TRIM(score_reasoning) = ''))
-          )
         """
-    )
-    n = cur.rowcount
+    ).rowcount
     conn.commit()
-    return n
+    return reset_count
 
 
 def _setup_applypilot(ctx, input_payload: dict) -> None:
@@ -253,6 +239,9 @@ def run_applypilot(ctx, input: dict):
         stages = list(_DEFAULT_STAGES)
 
     with ctx.safe_step("setup"):
+        from applypilot.config import DB_PATH, load_env, ensure_dirs
+        from applypilot.database import close_connection, init_db
+
         # DEBUG: container resume path / mount (remove after diagnosing dashboard runs)
         resume_path = ctx.inputs.get("resume", "MISSING")
         ctx.log(f"DEBUG: resume_path={resume_path!r}")
@@ -270,11 +259,15 @@ def run_applypilot(ctx, input: dict):
             ctx.log(
                 f"DEBUG: /run-inputs/resume contents={os.listdir('/run-inputs/resume')}"
             )
-        _setup_applypilot(ctx, effective)
-        from applypilot.config import DB_PATH, load_env, ensure_dirs
-        from applypilot.database import init_db
 
-        # Phase E: restore persistent DB snapshot from Runforge storage.
+        # Order: DB restore + init first, then materialize workspace (resume.txt, profile, …).
+        # There is no Pipeline constructed here — ApplyPilot's pipeline runs per stage — and
+        # run_scoring() reads RESUME_PATH from disk once at the start of the score stage.
+        # Writing resume.txt after restore avoids any chance of an older empty resume lingering
+        # as the "last write" before scoring in odd edge cases; .env from setup must load after
+        # _setup_applypilot writes keys.
+        ensure_dirs()
+        close_connection()
         restored = ctx.storage.get_file("applypilot.db")
         if restored:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -285,9 +278,10 @@ def run_applypilot(ctx, input: dict):
         else:
             ctx.log("Storage restore: no previous applypilot.db found (first run or cleared storage)")
 
+        init_db()
+        _setup_applypilot(ctx, effective)
         load_env()
         ensure_dirs()
-        init_db()
         ctx.log("ApplyPilot configured and database initialized (schema ensured)")
 
     from applypilot.database import get_stats
@@ -301,7 +295,7 @@ def run_applypilot(ctx, input: dict):
                 reset_n = _reset_failed_scores_for_rescoring()
                 if reset_n > 0:
                     ctx.log(
-                        f"Reset {reset_n} job(s) with failed/empty scores (e.g. LLM errors) for re-scoring"
+                        f"Cleared prior scores on {reset_n} job(s); re-scoring with current resume"
                     )
 
             result = _run_stage(
