@@ -245,6 +245,23 @@ def run_applypilot(ctx, input: dict):
         stages = list(_DEFAULT_STAGES)
 
     with ctx.safe_step("setup"):
+        # DEBUG: container resume path / mount (remove after diagnosing dashboard runs)
+        resume_path = ctx.inputs.get("resume", "MISSING")
+        ctx.log(f"DEBUG: resume_path={resume_path!r}")
+        _can_stat = (
+            resume_path not in (None, "", "MISSING")
+            and isinstance(resume_path, str)
+        )
+        ctx.log(
+            f"DEBUG: exists={os.path.exists(resume_path) if _can_stat else 'N/A'}"
+        )
+        ctx.log(
+            f"DEBUG: /run-inputs contents={os.listdir('/run-inputs') if os.path.exists('/run-inputs') else 'DIR NOT FOUND'}"
+        )
+        if os.path.exists("/run-inputs/resume"):
+            ctx.log(
+                f"DEBUG: /run-inputs/resume contents={os.listdir('/run-inputs/resume')}"
+            )
         _setup_applypilot(effective)
         from applypilot.config import DB_PATH, load_env, ensure_dirs
         from applypilot.database import init_db
