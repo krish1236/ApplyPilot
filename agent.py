@@ -109,7 +109,7 @@ def _apply_experience_inputs(input_payload: dict) -> None:
                     RESUME_PATH.write_bytes(p.read_bytes())
 
 
-def _materialize_applypilot_workspace(effective: dict) -> None:
+def _materialize_applypilot_workspace(ctx, effective: dict) -> None:
     """Ensure ~/.applypilot (APPLYPILOT_DIR) has resume.txt, profile.json, searches.yaml.
 
     The scorer reads RESUME_PATH (resume.txt). Uploaded Runforge paths may differ; build_config
@@ -120,6 +120,12 @@ def _materialize_applypilot_workspace(effective: dict) -> None:
 
     ensure_dirs()
     cfg = build_applypilot_config(effective)
+    ctx.log(f"DEBUG materialize: effective.get('resume')={effective.get('resume')!r}")
+    ctx.log(f"DEBUG materialize: config resume_path={cfg.get('resume_path')!r}")
+    _cfg_rt = cfg.get("resume_text") or ""
+    ctx.log(
+        f"DEBUG materialize: config resume_text length={len(_cfg_rt) if isinstance(_cfg_rt, str) else 0}"
+    )
 
     resume_path = cfg.get("resume_path")
     if not (isinstance(resume_path, str) and resume_path.strip()):
@@ -194,7 +200,7 @@ def _reset_failed_scores_for_rescoring() -> int:
     return n
 
 
-def _setup_applypilot(input_payload: dict) -> None:
+def _setup_applypilot(ctx, input_payload: dict) -> None:
     """Write ApplyPilot config files from the run input payload.
 
     ApplyPilot expects files in APPLYPILOT_DIR (~/.applypilot or env):
@@ -204,7 +210,7 @@ def _setup_applypilot(input_payload: dict) -> None:
 
     ensure_dirs()
     _apply_experience_inputs(input_payload)
-    _materialize_applypilot_workspace(input_payload)
+    _materialize_applypilot_workspace(ctx, input_payload)
 
     env_lines = []
     for key in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL", "LLM_MODEL", "CAPSOLVER_API_KEY"):
@@ -262,7 +268,7 @@ def run_applypilot(ctx, input: dict):
             ctx.log(
                 f"DEBUG: /run-inputs/resume contents={os.listdir('/run-inputs/resume')}"
             )
-        _setup_applypilot(effective)
+        _setup_applypilot(ctx, effective)
         from applypilot.config import DB_PATH, load_env, ensure_dirs
         from applypilot.database import init_db
 
